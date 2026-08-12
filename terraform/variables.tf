@@ -51,33 +51,3 @@ variable "windows_instance_type" {
   type        = string
   default     = "t3.small"
 }
-
-variable "fsx_storage_capacity" {
-  description = "Capacidade de armazenamento SSD do FSx em GiB"
-  type        = number
-  default     = 1024
-}
-
-variable "fsx_throughput" {
-  description = "Throughput do FSx em MB/s"
-  type        = number
-  default     = 128
-}
-
-variable "fsx_admin_password" {
-  description = "Senha do fsxadmin para o FSx (mínimo 8 caracteres, 1 especial, 1 número, 1 letra)"
-  type        = string
-  sensitive   = true
-}
-
-variable "nfs_volume_size" {
-  description = "Tamanho do volume NFS em GiB"
-  type        = number
-  default     = 10
-}
-
-variable "smb_volume_size" {
-  description = "Tamanho do volume SMB em GiB"
-  type        = number
-  default     = 10
-}

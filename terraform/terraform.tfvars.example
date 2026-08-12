@@ -11,13 +11,3 @@ private_subnet_cidr = "10.0.11.0/24"
 
 linux_instance_type   = "t3.micro"
 windows_instance_type = "t3.small"
-
-fsx_storage_capacity = 1024
-fsx_throughput       = 128
-
-nfs_volume_size = 10
-smb_volume_size = 10
-
-# Senha do administrador do FSx (fsxadmin) e da SVM (vsadmin)
-# Substitua por uma senha forte, que cumpra os requisitos da AWS para senhas do FSx.
-fsx_admin_password = "SecretPassword123!"

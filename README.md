@@ -1,6 +1,6 @@
 # Amazon FSx for NetApp ONTAP POC
 
-Este projeto cria uma infraestrutura mínima na AWS para testar o funcionamento do Amazon FSx for NetApp ONTAP. O ambiente inclui uma VPC com subnets pública e privada, uma instância Linux, uma instância Windows, e um sistema de arquivos FSx for ONTAP.
+Este projeto cria uma infraestrutura mínima na AWS para testar o funcionamento do Amazon FSx for NetApp ONTAP. O ambiente inclui uma VPC com subnets pública e privada, uma instância Linux, uma instância Windows. **O provisionamento do FSx ONTAP é realizado manualmente.**
 
 ## Custos
 
@@ -23,7 +23,7 @@ Para utilizar este projeto, você precisará de:
 
 ## Estrutura do projeto
 
-- `terraform/`: Código de infraestrutura.
+- `terraform/`: Código de infraestrutura adjacente (VPC, Subnets, EC2, SG, IAM).
   - `versions.tf`: Definição da versão do Terraform e provider AWS.
   - `provider.tf`: Configuração do provider AWS.
   - `variables.tf`: Definição das variáveis de entrada.
@@ -32,9 +32,9 @@ Para utilizar este projeto, você precisará de:
   - `security.tf`: Security Groups para instâncias e FSx.
   - `iam.tf`: Role, Policy, e Instance Profile para uso do AWS Systems Manager (SSM).
   - `ec2.tf`: Definição das instâncias EC2 Linux e Windows.
-  - `fsx.tf`: Criação do File System, SVM, e Volumes do ONTAP.
   - `outputs.tf`: Valores de saída importantes após a criação.
   - `terraform.tfvars.example`: Exemplo de configuração de variáveis.
+- `FSX_MANUAL_SETUP.md`: Guia para provisionamento manual do FSx for NetApp ONTAP via Console e CLI de destruição.
 - `scripts/`: Scripts operacionais para configuração e teste do ONTAP.
   - `configure-ontap.sh`: Configura export policies, SMB shares e usuários locais via SSH no gerenciamento da SVM.
   - `test-connectivity.sh`: Valida a conectividade das EC2 para o FSx.
@@ -57,32 +57,17 @@ Para utilizar este projeto, você precisará de:
 
 3. Edite o arquivo `terraform.tfvars` se desejar alterar a região, bloco CIDR ou outros parâmetros.
 
-## Inicialização e Planejamento
+## Inicialização e Criação da Infraestrutura Adjacente
 
 ```bash
-# Inicializa o Terraform baixando o provider AWS
 terraform init
-
-# Valida a sintaxe dos arquivos
-terraform validate
-
-# Exibe o plano de execução
-terraform plan
-```
-
-## Criação
-
-```bash
 terraform apply
 ```
 Confirme a execução digitando `yes`.
 
-## Outputs
+## Provisionamento do Storage (Manual)
 
-Após o término da criação, o Terraform exibirá os `outputs`. Se precisar visualizá-los novamente:
-```bash
-terraform output
-```
+Após o Terraform concluir, siga os passos do documento `FSX_MANUAL_SETUP.md` para criar o FSx, SVM e Volumes via Console da AWS. Você precisará dos outputs gerados pelo Terraform (`private_subnet_id`, `fsx_security_group_id`, etc.).
 
 ## Acesso às Instâncias (SSM Session Manager)
 
@@ -103,15 +88,16 @@ aws ssm start-session --target <INSTANCE_ID>
 
 ## Configuração ONTAP
 
-O Terraform provisiona a infraestrutura, mas a configuração operacional (shares SMB, usuários, export policies) é feita através dos scripts.
+A configuração operacional (shares SMB, usuários, export policies) é feita através dos scripts.
 
 > [!NOTE]
-> Você precisará da senha fsxadmin que o Terraform gerou (ou usará a padrão do script).
+> Você precisará da senha `fsxadmin` que você definiu durante a criação manual no console.
 
-Conecte-se na EC2 Linux via SSM, baixe ou crie os scripts lá, e execute:
+Conecte-se na EC2 Linux via SSM, e execute:
 ```bash
 bash scripts/configure-ontap.sh
 ```
+Serão solicitados os endpoints que você obterá no console da AWS após a criação da SVM.
 
 ## Testes
 
@@ -123,13 +109,15 @@ Os testes devem ser executados dentro das respectivas instâncias (NFS no Linux,
 
 ## Destruição
 
-Para remover toda a infraestrutura e evitar cobranças:
+Para remover toda a infraestrutura e evitar cobranças, a destruição ocorre em duas etapas:
 
+1. Destrua os recursos criados manualmente executando os comandos AWS CLI na seção de destruição do `FSX_MANUAL_SETUP.md`.
+2. Após a exclusão do FSx ser concluída:
 ```bash
 cd terraform
 terraform destroy
 ```
-Confirme com `yes`. Note que não haverá final backup.
+Confirme com `yes`. 
 
 ## Verificação final
 

@@ -6,10 +6,10 @@ set -e
 
 echo "=== Configuração FSx for ONTAP ==="
 
-read -p "Informe o DNS Management Endpoint da SVM (svm_management_dns_name no output): " SVM_ENDPOINT
+read -p "Informe o DNS Management Endpoint da SVM: " SVM_ENDPOINT
 read -p "Informe a rede CIDR dos clientes para liberar o NFS (ex: 10.0.1.0/24): " CLIENT_CIDR
-read -p "Informe o IP Privado da instância Windows (windows_private_ip no output): " WIN_IP
-read -s -p "Informe a senha do fsxadmin/vsadmin: " ADMIN_PASS
+read -p "Informe o IP Privado da instância Windows (ver output do Terraform): " WIN_IP
+read -s -p "Informe a senha do fsxadmin (que você configurou na criação manual): " ADMIN_PASS
 echo ""
 read -p "Informe o nome de usuário local SMB que deseja criar (ex: smbuser): " SMB_USER
 read -s -p "Informe a senha para o novo usuário SMB (deve ser complexa): " SMB_PASS
@@ -24,14 +24,10 @@ sshpass -p "$ADMIN_PASS" ssh -o StrictHostKeyChecking=no vsadmin@$SVM_ENDPOINT "
 echo "[3/4] Criando usuário local SMB ($SMB_USER)..."
 sshpass -p "$ADMIN_PASS" ssh -o StrictHostKeyChecking=no vsadmin@$SVM_ENDPOINT "vserver cifs users-and-groups local-user create -vserver svmpoc -user-name $SMB_USER -description \"Local SMB User for POC\""
 
-# A API SSH do ONTAP para definir senha de usuário local via CLI pode exigir interação se não usar batch, mas tentaremos com o password injetado.
-# Como workaround, o ONTAP suporta set-password em batch mode a partir de versões mais recentes, ou usar a api REST.
-# Para manter a simplicidade em bash com sshpass, vamos forçar a troca de senha.
-# O ONTAP pede a senha do admin e depois as senhas novas. Usaremos um workaround simples:
 echo "Por favor, para definir a senha do $SMB_USER o ONTAP exige um prompt interativo."
 echo "Execute o comando abaixo e digite a senha '$SMB_PASS' quando solicitado:"
 echo "ssh vsadmin@$SVM_ENDPOINT \"vserver cifs users-and-groups local-user set-password -vserver svmpoc -user-name $SMB_USER\""
-echo "OBS: Pressione ENTER para tentar executar de forma automatizada (pode falhar dependendo da versão do ONTAP)."
+echo "OBS: Pressione ENTER para tentar executar de forma automatizada..."
 read -p ""
 
 sshpass -p "$ADMIN_PASS" ssh -o StrictHostKeyChecking=no vsadmin@$SVM_ENDPOINT <<EOF
