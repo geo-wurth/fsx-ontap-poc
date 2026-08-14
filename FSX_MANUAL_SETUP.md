@@ -241,11 +241,11 @@ No terminal do **Linux**:
 ```bash
 # Ler e editar no volume NTFS (/mnt/smb)
 cat /mnt/smb/win_created_ntfs.txt
-echo "Linha 2: Editado com sucesso pelo LINUX no volume NTFS." >> /mnt/smb/win_created_ntfs.txt
+echo -e "\nLinha 2: Editado com sucesso pelo LINUX no volume NTFS." >> /mnt/smb/win_created_ntfs.txt
 
 # Ler e editar no volume UNIX (/mnt/nfs)
 cat /mnt/nfs/win_created_unix.txt
-echo "Linha 2: Editado com sucesso pelo LINUX no volume UNIX." >> /mnt/nfs/win_created_unix.txt
+echo -e "\nLinha 2: Editado com sucesso pelo LINUX no volume UNIX." >> /mnt/nfs/win_created_unix.txt
 ```
 
 #### 2.2 Criar novos arquivos e aplicar `chmod 666`:
