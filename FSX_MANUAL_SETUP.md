@@ -1,16 +1,18 @@
 # Guia Completo de Provisionamento e Testes - Amazon FSx for NetApp ONTAP
 
 Este documento contém o passo a passo detalhado para:
-1. Criar o File System FSx, a Storage Virtual Machine (SVM) e os Volumes no Console AWS.
-2. Configurar o serviço CIFS/SMB no ONTAP para permitir acesso do Windows a volumes com estilo de segurança **NTFS** e **UNIX**.
-3. Realizar testes cruzados de leitura e escrita bidirecional entre Linux e Windows.
-4. Destruir os recursos manuais via AWS CLI evitando custos residuais.
+1. Identificar com clareza os **Endpoints** do FSx e da SVM.
+2. Criar o File System FSx, a Storage Virtual Machine (SVM) e os Volumes no Console AWS.
+3. Configurar o serviço CIFS/SMB no ONTAP para permitir acesso do Windows a volumes **NTFS** e **UNIX**.
+4. Ajustar as permissões raiz no Linux (`chmod 777`) para desbloquear a gravação do Windows no volume UNIX.
+5. Executar o **teste cruzado ordenado** (Windows Cria ➔ Linux Edita & Cria ➔ Windows Edita ➔ Linux Valida).
+6. Destruir os recursos com limpeza de Network Interfaces (ENIs/NICs) no CloudShell.
 
 ---
 
 ## 🔑 Padrão de Credenciais da POC
 
-Para simplificar e unificar a operação do laboratório, utilize a seguinte senha padrão em todas as etapas:
+Utilize a seguinte senha padrão em todas as etapas:
 - **Senha Padrão**: `Fsx@dm1n`
 - **Usuário Admin do File System**: `fsxadmin`
 - **Usuário Admin da SVM**: `vsadmin`
@@ -18,39 +20,50 @@ Para simplificar e unificar a operação do laboratório, utilize a seguinte sen
 
 ---
 
-## 🗺️ Topologia e Fluxo de Acesso entre as Máquinas
+## 🧭 Guia Rápido de Endpoints: Onde pegar e onde usar?
 
-Como a arquitetura da POC não expõe portas SSH/RDP para a Internet pública, o fluxo de acesso e configuração é estruturado da seguinte forma:
+O FSx for NetApp ONTAP fornece diferentes endpoints para finalidades distintas. Localize-os no Console da AWS:
+
+| Nome do Endpoint | Onde localizar no Console AWS | Usuário / Porta | Para que serve? |
+| :--- | :--- | :--- | :--- |
+| **File System Management DNS** | **FSx** > **File systems** > Selecione `fsx-ontap-poc-fs` > Aba *Network & security* > *Management DNS name* | `fsxadmin`<br>Porta `22` (SSH) | **Acesso de Gerência Geral:** Usado para conectar via SSH a partir da EC2 Linux e rodar os comandos administrativos do ONTAP (`vserver cifs ...`). *(Ex: `management.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com`)* |
+| **SVM Management DNS** | **FSx** > **Storage virtual machines** > Selecione `svmpoc` > Aba *Endpoints* > *Management DNS name* | `vsadmin`<br>Porta `22` (SSH) | **Acesso de Gerência da SVM:** Alternativa para gerenciar exclusivamente a SVM `svmpoc`. |
+| **SVM NFS / SMB DNS Name** | **FSx** > **Storage virtual machines** > Selecione `svmpoc` > Aba *Endpoints* > *NFS DNS name* / *SMB DNS name* | `smbuser`<br>Portas `2049` (NFS), `445` (SMB) | **Acesso aos Dados:** Usado no Linux para montar NFS/SMB (`/mnt/nfs`, `/mnt/smb`) e no Windows para mapear as unidades (`\\<endpoint>\vol_smb`, `\\<endpoint>\vol_nfs`). *(Ex: `svm-007291e2eb8158be3.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com`)* |
+
+---
+
+## 🗺️ Topologia e Fluxo de Acesso entre as Máquinas
 
 ```
 [Seu Computador / AWS Console]
         │
         ├── (AWS SSM Session Manager) ──> [EC2 Linux (Public Subnet)]
         │                                        │
-        │                                        ├── (SSH porta 22) ──> [FSx ONTAP Management CLI (Private Subnet)]
-        │                                        ├── (NFS porta 2049) ─> [Volume NFS /vol_nfs]
-        │                                        └── (SMB porta 445) ──> [Volume SMB /vol_smb]
+        │                                        ├── (SSH porta 22) ──> [File System Management DNS (FSx CLI)]
+        │                                        ├── (NFS porta 2049) ─> [SVM NFS DNS :/vol_nfs]
+        │                                        └── (SMB porta 445) ──> [SVM SMB DNS :/vol_smb]
         │
         └── (AWS SSM Session Manager) ──> [EC2 Windows (Public Subnet)]
                                                  │
-                                                 ├── (SMB porta 445) ──> [Volume SMB \\<endpoint>\vol_smb]
-                                                 └── (SMB porta 445) ──> [Volume NFS \\<endpoint>\vol_nfs]
+                                                 ├── (SMB porta 445) ──> [\\<SVM SMB DNS>\vol_smb (Z:)]
+                                                 └── (SMB porta 445) ──> [\\<SVM SMB DNS>\vol_nfs (Y:)]
 ```
 
 ---
 
 ## 1. Pré-requisitos (Terraform)
 
-Execute o provisionamento da infraestrutura adjacente no diretório `terraform/`:
+No **AWS CloudShell**, execute o provisionamento da infraestrutura adjacente no diretório `terraform/`:
 ```bash
+cd fsx-ontap-poc/terraform
 terraform init
 terraform apply
 ```
 
 Anote os seguintes outputs:
-- `vpc_id` (Ex: `vpc-xxxxxx`)
-- `private_subnet_id` (Ex: `subnet-xxxxxx`)
-- `fsx_security_group_id` (Ex: `sg-xxxxxx`)
+- `vpc_id`
+- `private_subnet_id`
+- `fsx_security_group_id`
 - `linux_instance_id` e `windows_instance_id`
 
 ---
@@ -58,30 +71,28 @@ Anote os seguintes outputs:
 ## 2. Criação do FSx for NetApp ONTAP via Console AWS
 
 ### 2.1 Criar o File System
-1. Acesse o console da AWS no serviço **Amazon FSx** e clique em **Create file system**.
-2. Selecione **Amazon FSx for NetApp ONTAP** e clique em **Next**.
-3. Escolha **Standard create** e configure:
+1. Acesse o **Amazon FSx** no Console AWS e clique em **Create file system**.
+2. Selecione **Amazon FSx for NetApp ONTAP** > **Next**.
+3. Escolha **Standard create**:
    - **File system name**: `fsx-ontap-poc-fs`
    - **Deployment type**: `Single-AZ`
    - **Storage capacity**: `1024` GiB (SSD)
-   - **Provisioned SSD IOPS**: `Automatic`
    - **Throughput capacity**: `128` MB/s
-   - **Virtual Private Cloud (VPC)**: Selecione a VPC criada pelo Terraform (`vpc_id`).
-   - **VPC Security Groups**: Selecione o Security Group do FSx (`fsx_security_group_id`). *Remova o Security Group default*.
-   - **Subnet**: Selecione a Subnet Privada (`private_subnet_id`).
+   - **Virtual Private Cloud (VPC)**: Selecione o `vpc_id` do Terraform.
+   - **VPC Security Groups**: Selecione o `fsx_security_group_id`. (*Remova o default*).
+   - **Subnet**: Selecione a `private_subnet_id`.
    - **File system administrator password**: `Fsx@dm1n`
-   - **Daily automatic backup**: **Desmarcar/Disable** (para evitar cobranças de backup).
-4. Clique em **Next** e confirme a criação clicando em **Create file system**.
-*(Aguarde cerca de 15 a 20 minutos até que o status passe para `Available`).*
+   - **Daily automatic backup**: **Desmarcar/Disable** (evita custos na POC).
+4. Clique em **Next** e confirme em **Create file system**. *(Aguarde status `Available`)*.
 
 ### 2.2 Criar a Storage Virtual Machine (SVM)
-1. No menu lateral do FSx, clique em **Storage virtual machines** e em **Create storage virtual machine**.
+1. No menu lateral, clique em **Storage virtual machines** > **Create storage virtual machine**.
 2. Configure:
-   - **File system**: Selecione `fsx-ontap-poc-fs`.
+   - **File system**: `fsx-ontap-poc-fs`
    - **Storage virtual machine name**: `svmpoc`
    - **Root volume security style**: `UNIX`
    - **SVM administrator password**: `Fsx@dm1n`
-3. Clique em **Create storage virtual machine** e aguarde ficar `Available`.
+3. Clique em **Create storage virtual machine**. *(Aguarde status `Available`)*.
 
 ### 2.3 Criar os Volumes (NFS e SMB)
 No menu lateral, clique em **Volumes** > **Create volume**.
@@ -91,33 +102,31 @@ No menu lateral, clique em **Volumes** > **Create volume**.
 - **Volume name**: `vol_nfs`
 - **Volume size**: `10` GiB
 - **Junction path**: `/vol_nfs`
-- **Storage efficiency**: `Enabled`
 - **Security style**: `UNIX`
-- **Snapshot policy**: `None` (ou `Default`)
+- **Snapshot policy**: `None`
 
 #### Volume 2: SMB (`vol_smb`)
 - **Storage virtual machine**: `svmpoc`
 - **Volume name**: `vol_smb`
 - **Volume size**: `10` GiB
 - **Junction path**: `/vol_smb`
-- **Storage efficiency**: `Enabled`
 - **Security style**: `NTFS`
-- **Snapshot policy**: `None` (ou `Default`)
+- **Snapshot policy**: `None`
 
 ---
 
 ## 3. Configuração do CIFS/SMB no ONTAP CLI
 
-Para que o Windows possa acessar e editar tanto o volume NTFS (`vol_smb`) quanto o volume UNIX (`vol_nfs`), precisamos criar o servidor CIFS, o usuário local e os respectivos shares no ONTAP.
+Configura o servidor CIFS, o usuário local e publica os dois volumes (`vol_smb` e `vol_nfs`) como compartilhamentos SMB para o Windows.
 
 ### 3.1 Conectar na CLI do ONTAP a partir do Linux
 1. Abra uma sessão no **EC2 Linux** via AWS Systems Manager:
    ```bash
    aws ssm start-session --target <linux_instance_id>
    ```
-2. Na EC2 Linux, conecte-se via SSH no **Management Endpoint** do FSx (ou da SVM):
+2. Na EC2 Linux, conecte-se via SSH no **File System Management DNS**:
    ```bash
-   ssh fsxadmin@<management_dns_name>
+   ssh fsxadmin@<file_system_management_dns>
    ```
    > *Exemplo real:* `ssh fsxadmin@management.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com`  
    > **Senha**: `Fsx@dm1n`
@@ -139,54 +148,57 @@ vserver cifs users-and-groups local-user set-password -vserver svmpoc -user-name
 vserver cifs share create -vserver svmpoc -share-name vol_smb -path /vol_smb
 vserver cifs share create -vserver svmpoc -share-name vol_nfs -path /vol_nfs
 
-# 5. Comandos de Verificação e Validação
+# 5. Comandos de Verificação
 vserver cifs users-and-groups local-user show -vserver svmpoc
 vserver cifs share access-control show -vserver svmpoc
 vserver security file-directory show -vserver svmpoc -path /vol_nfs
 vserver security file-directory show -vserver svmpoc -path /vol_smb
-volume show -vserver svmpoc -volume vol_smb -fields volume,security-style,junction-path
 ```
 
-Digite `exit` para sair da CLI do ONTAP e retornar ao terminal da EC2 Linux.
+Digite `exit` para retornar ao terminal do Linux.
 
 ---
 
-## 4. Montagem dos Volumes nos Clientes
+## 4. Montagem dos Volumes e Ajuste Obrigatório de Permissões
 
-Obtenha o DNS da SVM no console do FSx (ex: `svm-007291e2eb8158be3.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com`).
+> [!IMPORTANT]
+> **Por que ajustar a permissão da pasta `/mnt/nfs` para `777` no Linux?**  
+> Por padrão, a raiz de um volume UNIX montado em Linux pertence ao usuário `root:root` com permissão `755` (`drwxr-xr-x`).  
+> Quando o Windows conecta via SMB ao volume UNIX (`\\<svm_dns>\vol_nfs`), o ONTAP mapeia o usuário do Windows (`smbuser`) para um usuário sem privilégios UNIX (`nobody` / `pcuser`). Como `others` têm apenas permissão de leitura (`r-x`), o Windows **não conseguirá criar pastas nem arquivos** dentro do drive `Y:` a menos que o root no Linux execute `chmod 777 /mnt/nfs`.
 
-### 4.1 No EC2 Linux (via SSM Session)
-Execute como root (`sudo su -`):
+### 4.1 No EC2 Linux: Montar e Liberar Permissões
+Conectado na EC2 Linux (`sudo su -`):
 
 ```bash
-# Criar diretórios de montagem
+# 1. Criar pontos de montagem
 mkdir -p /mnt/nfs /mnt/smb
 
-# Montar o volume NFS
-mount -t nfs <svm_dns_name>:/vol_nfs /mnt/nfs
+# 2. Montar o volume NFS (usando o SVM NFS DNS Name)
+mount -t nfs <svm_nfs_dns_name>:/vol_nfs /mnt/nfs
 
-# Montar o volume SMB (CIFS)
-mount -t cifs //<svm_dns_name>/vol_smb /mnt/smb -o username=smbuser,domain=FSXSMB,password=Fsx@dm1n,vers=3.0
+# 3. Montar o volume SMB (usando o SVM SMB DNS Name)
+mount -t cifs //<svm_smb_dns_name>/vol_smb /mnt/smb -o username=smbuser,domain=FSXSMB,password=Fsx@dm1n,vers=3.0
 
-# Validar montagens
+# 4. 🔑 AJUSTE OBRIGATÓRIO: Conceder permissão total na raiz do volume UNIX para o Windows poder criar arquivos
+chmod 777 /mnt/nfs
+
+# Validar montagens e permissões
 df -hT | grep /mnt
+ls -ld /mnt/nfs
 ```
 
-### 4.2 No EC2 Windows (via SSM Session ou PowerShell)
-Abra uma sessão SSM na instância Windows:
-```bash
-aws ssm start-session --target <windows_instance_id>
-```
+### 4.2 No EC2 Windows: Mapear os Drives
+Conecte-se na EC2 Windows via SSM Session Manager (`aws ssm start-session --target <windows_instance_id>`):
 
-No PowerShell:
+No PowerShell do Windows:
 ```powershell
-# Credenciais do usuário SMB
+# Definir credenciais do smbuser
 $secPass = ConvertTo-SecureString "Fsx@dm1n" -AsPlainText -Force
 $cred = New-Object System.Management.Automation.PSCredential("FSXSMB\smbuser", $secPass)
 
-# Mapear volume NTFS (Z:) e volume UNIX (Y:)
-New-PSDrive -Name Z -PSProvider FileSystem -Root "\\<svm_dns_name>\vol_smb" -Credential $cred
-New-PSDrive -Name Y -PSProvider FileSystem -Root "\\<svm_dns_name>\vol_nfs" -Credential $cred
+# Mapear Volume NTFS na unidade Z: e Volume UNIX na unidade Y:
+New-PSDrive -Name Z -PSProvider FileSystem -Root "\\<svm_smb_dns_name>\vol_smb" -Credential $cred
+New-PSDrive -Name Y -PSProvider FileSystem -Root "\\<svm_smb_dns_name>\vol_nfs" -Credential $cred
 
 # Verificar unidades mapeadas
 Get-PSDrive Z, Y
@@ -194,115 +206,133 @@ Get-PSDrive Z, Y
 
 ---
 
-## 5. Testes Cruzados de Leitura e Escrita Bidirecional (Multi-Protocolo)
+## 5. Testes Cruzados de Leitura e Escrita Bidirecional (Passo a Passo Ordenado)
 
-### 🧪 Teste 1: Windows cria arquivo ➔ Linux lê e edita
+Siga exatamente a ordem sequencial das 4 fases abaixo:
 
-#### Cenário A: No Volume NTFS (`vol_smb`)
-1. **No Windows (PowerShell)**:
-   ```powershell
-   "Arquivo criado pelo Windows no volume NTFS" | Out-File -FilePath Z:\win_created_ntfs.txt -Encoding ascii
-   ```
-2. **No Linux**:
-   ```bash
-   cat /mnt/smb/win_created_ntfs.txt
-   echo "Linha adicionada pelo Linux no volume NTFS" >> /mnt/smb/win_created_ntfs.txt
-   ```
-3. **No Windows (validar edição)**:
-   ```powershell
-   Get-Content Z:\win_created_ntfs.txt
-   ```
-
-#### Cenário B: No Volume UNIX (`vol_nfs`)
-1. **No Windows (PowerShell)**:
-   ```powershell
-   "Arquivo criado pelo Windows no volume UNIX" | Out-File -FilePath Y:\win_created_unix.txt -Encoding ascii
-   ```
-2. **No Linux**:
-   ```bash
-   cat /mnt/nfs/win_created_unix.txt
-   echo "Linha adicionada pelo Linux no volume UNIX" >> /mnt/nfs/win_created_unix.txt
-   ```
-3. **No Windows (validar edição)**:
-   ```powershell
-   Get-Content Y:\win_created_unix.txt
-   ```
+```
+[Fase 1: Windows Cria] ──> [Fase 2: Linux Edita & Cria] ──> [Fase 3: Windows Valida & Edita] ──> [Fase 4: Linux Valida Final]
+```
 
 ---
 
-### 🧪 Teste 2: Linux cria arquivo ➔ Windows lê e edita
+### 🟢 FASE 1: Windows ➔ Cria os Arquivos Iniciais
 
+No PowerShell do **Windows**:
+
+```powershell
+# 1. Criar arquivo no volume NTFS (Z:)
+"Linha 1: Arquivo criado pelo WINDOWS no volume NTFS." | Out-File -FilePath Z:\win_created_ntfs.txt -Encoding ascii
+
+# 2. Criar arquivo no volume UNIX (Y:) [Funcionará perfeitamente graças ao chmod 777 feito na etapa 4]
+"Linha 1: Arquivo criado pelo WINDOWS no volume UNIX." | Out-File -FilePath Y:\win_created_unix.txt -Encoding ascii
+
+# Verificar criação
+Get-ChildItem Z:\win_created_ntfs.txt, Y:\win_created_unix.txt
+```
+
+---
+
+### 🟡 FASE 2: Linux ➔ Edita os Arquivos do Windows E Cria os Arquivos do Linux
+
+No terminal do **Linux**:
+
+#### 2.1 Editar os arquivos que o Windows criou:
+```bash
+# Ler e editar no volume NTFS (/mnt/smb)
+cat /mnt/smb/win_created_ntfs.txt
+echo "Linha 2: Editado com sucesso pelo LINUX no volume NTFS." >> /mnt/smb/win_created_ntfs.txt
+
+# Ler e editar no volume UNIX (/mnt/nfs)
+cat /mnt/nfs/win_created_unix.txt
+echo "Linha 2: Editado com sucesso pelo LINUX no volume UNIX." >> /mnt/nfs/win_created_unix.txt
+```
+
+#### 2.2 Criar novos arquivos e aplicar `chmod 666`:
 > [!IMPORTANT]
-> **Ajuste de Permissões (`chmod 666`):**  
-> Quando um arquivo é criado no Linux em um volume com security-style `UNIX`, as permissões padrão do Linux (umask) geralmente concedem escrita apenas ao proprietário (ex: `root`).  
-> O usuário SMB do Windows (`smbuser`) mapeia para um usuário sem privilégios UNIX (`pcuser` / `nobody`). Portanto, para permitir que o Windows edite o arquivo criado no Linux, é **necessário** liberar permissão de escrita para outros com `chmod 666`.
+> O Linux cria arquivos com umask restritiva (`rw-r--r--`). Aplicamos `chmod 666` para que o usuário do Windows (`smbuser`) tenha permissão de gravar alterações neles.
 
-#### Cenário A: No Volume UNIX (`vol_nfs`)
-1. **No Linux**:
-   ```bash
-   echo "Arquivo criado pelo Linux no volume UNIX" > /mnt/nfs/linux_created_unix.txt
-   
-   # Alterar permissões para permitir que o Windows edite
-   chmod 666 /mnt/nfs/linux_created_unix.txt
-   ls -l /mnt/nfs/linux_created_unix.txt
-   ```
-2. **No Windows (PowerShell)**:
-   ```powershell
-   Get-Content Y:\linux_created_unix.txt
-   Add-Content -Path Y:\linux_created_unix.txt -Value "Linha adicionada pelo Windows no volume UNIX"
-   ```
-3. **No Linux (validar edição)**:
-   ```bash
-   cat /mnt/nfs/linux_created_unix.txt
-   ```
+```bash
+# Criar no volume NTFS e liberar permissão
+echo "Linha 1: Arquivo criado pelo LINUX no volume NTFS." > /mnt/smb/linux_created_ntfs.txt
+chmod 666 /mnt/smb/linux_created_ntfs.txt
 
-#### Cenário B: No Volume NTFS (`vol_smb`)
-1. **No Linux**:
-   ```bash
-   echo "Arquivo criado pelo Linux no volume NTFS" > /mnt/smb/linux_created_ntfs.txt
-   chmod 666 /mnt/smb/linux_created_ntfs.txt
-   ```
-2. **No Windows (PowerShell)**:
-   ```powershell
-   Get-Content Z:\linux_created_ntfs.txt
-   Add-Content -Path Z:\linux_created_ntfs.txt -Value "Linha adicionada pelo Windows no volume NTFS"
-   ```
-3. **No Linux (validar edição)**:
-   ```bash
-   cat /mnt/smb/linux_created_ntfs.txt
-   ```
+# Criar no volume UNIX e liberar permissão
+echo "Linha 1: Arquivo criado pelo LINUX no volume UNIX." > /mnt/nfs/linux_created_unix.txt
+chmod 666 /mnt/nfs/linux_created_unix.txt
+
+# Validar permissões
+ls -l /mnt/smb/linux_created_ntfs.txt /mnt/nfs/linux_created_unix.txt
+```
+
+---
+
+### 🔵 FASE 3: Windows ➔ Valida Edições do Linux E Edita os Arquivos do Linux
+
+No PowerShell do **Windows**:
+
+#### 3.1 Validar se o Linux editou os arquivos criados na Fase 1:
+```powershell
+Write-Host "--- Validando Z:\win_created_ntfs.txt ---"
+Get-Content Z:\win_created_ntfs.txt
+
+Write-Host "--- Validando Y:\win_created_unix.txt ---"
+Get-Content Y:\win_created_unix.txt
+```
+
+#### 3.2 Editar os arquivos criados pelo Linux na Fase 2:
+```powershell
+# Editar arquivo criado pelo Linux no volume NTFS (Z:)
+Add-Content -Path Z:\linux_created_ntfs.txt -Value "Linha 2: Editado com sucesso pelo WINDOWS no volume NTFS."
+
+# Editar arquivo criado pelo Linux no volume UNIX (Y:)
+Add-Content -Path Y:\linux_created_unix.txt -Value "Linha 2: Editado com sucesso pelo WINDOWS no volume UNIX."
+```
+
+---
+
+### 🟣 FASE 4: Linux ➔ Validação Final
+
+No terminal do **Linux**, confirme que as edições feitas pelo Windows nos arquivos do Linux foram persistidas:
+
+```bash
+echo "=== Conteudo Final do Volume NTFS (/mnt/smb/linux_created_ntfs.txt) ==="
+cat /mnt/smb/linux_created_ntfs.txt
+
+echo "=== Conteudo Final do Volume UNIX (/mnt/nfs/linux_created_unix.txt) ==="
+cat /mnt/nfs/linux_created_unix.txt
+```
+
+🎉 **Resultado:** Todos os cenários de leitura, escrita, criação cruzada e coexistência de protocolos (NFS e SMB) em volumes NTFS e UNIX foram validados com sucesso!
 
 ---
 
 ## 6. Referência Prática com Endpoints Reais
 
-Abaixo estão os comandos consolidados com o padrão de endpoints utilizados durante os testes reais de laboratório:
+Comandos consolidados com o padrão de endpoints utilizados durante os testes de laboratório:
 
 ```bash
-# 1. SSH na CLI de Gerência do ONTAP a partir do Linux:
+# 1. SSH na CLI do ONTAP a partir do Linux:
 ssh fsxadmin@management.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com
 # Password: Fsx@dm1n
 
-# 2. Configurações ONTAP executadas:
+# 2. Configurações ONTAP:
 vserver cifs create -vserver svmpoc -cifs-server FSXSMB -workgroup WORKGROUP
 vserver cifs users-and-groups local-user create -vserver svmpoc -user-name smbuser
 vserver cifs users-and-groups local-user set-password -vserver svmpoc -user-name smbuser
 vserver cifs share create -vserver svmpoc -share-name vol_smb -path /vol_smb
 vserver cifs share create -vserver svmpoc -share-name vol_nfs -path /vol_nfs
 
-# 3. Montagens no Linux:
+# 3. Montagens e Liberação de Permissão no Linux:
 sudo mkdir -p /mnt/nfs /mnt/smb
 sudo mount -t nfs svm-007291e2eb8158be3.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com:/vol_nfs /mnt/nfs
 sudo mount -t cifs //svm-007291e2eb8158be3.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com/vol_smb /mnt/smb -o username=smbuser,domain=FSXSMB,password=Fsx@dm1n,vers=3.0
+sudo chmod 777 /mnt/nfs
 
-# 4. Ajuste de permissão de teste:
-chmod 666 /mnt/nfs/linux_test.txt
-
-# 5. Caminhos UNC para acesso no Windows:
-# \\svm-007291e2eb8158be3.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com\vol_smb
-# \\svm-007291e2eb8158be3.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com\vol_nfs
-# Usuário: FSXSMB\smbuser
-# Senha:   Fsx@dm1n
+# 4. Mapeamento no Windows:
+# Z: -> \\svm-007291e2eb8158be3.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com\vol_smb
+# Y: -> \\svm-007291e2eb8158be3.fs-0312dff317496811b.fsx.us-east-1.amazonaws.com\vol_nfs
+# Usuário: FSXSMB\smbuser | Senha: Fsx@dm1n
 ```
 
 ---
@@ -311,25 +341,21 @@ chmod 666 /mnt/nfs/linux_test.txt
 
 > [!CAUTION]
 > **Ordem Obrigatória de Destruição:**
-> 1. Deletar os Volumes e o File System (sem criar backups).
+> 1. Deletar os Volumes e o File System (sempre desmarcando a criação de backups).
 > 2. Validar e excluir as **Network Interfaces (ENIs/NICs)** criadas pelo FSx no **AWS CloudShell**.
-> 3. Só então executar o `terraform destroy`.
-> 
-> Se tentar rodar o `terraform destroy` antes da liberação das ENIs, a VPC e os Security Groups ficarão **travados com erro de `DependencyViolation`**.
+> 3. Executar o `terraform destroy`.
 
 ---
 
 ### 7.1 Deletando os Recursos do FSx
 
-Você pode optar por deletar via **AWS Console** ou via **AWS CLI**:
-
 #### Opção A: Pelo Console AWS
-1. **Deletar Volumes**: Vá em FSx > Volumes > Selecione o volume (`vol_nfs` e `vol_smb`) > Actions > **Delete volume**.
-   - ⚠️ **MUITO IMPORTANTE**: Na janela de confirmação, **DESMARQUE** a opção *"Create final backup"* (ou escolha *"Do not create final backup"*). Digite o nome do volume e confirme.
-2. **Deletar SVM**: Vá em Storage Virtual Machines > Selecione `svmpoc` > Actions > **Delete storage virtual machine**.
-3. **Deletar File System**: Vá em File Systems > Selecione `fsx-ontap-poc-fs` > Actions > **Delete file system**.
-   - ⚠️ **MUITO IMPORTANTE**: Na janela de confirmação, **DESMARQUE** a opção *"Create final backup"*. Digite o ID do File System e confirme.
-   - *Aguarde alguns minutos até que o File System desapareça completamente do console.*
+1. **Deletar Volumes**: FSx > Volumes > Selecione `vol_nfs` e `vol_smb` > Actions > **Delete volume**.
+   - ⚠️ **DESMARQUE** a opção *"Create final backup"*. Digite o nome do volume e confirme.
+2. **Deletar SVM**: Storage Virtual Machines > Selecione `svmpoc` > Actions > **Delete storage virtual machine**.
+3. **Deletar File System**: File Systems > Selecione `fsx-ontap-poc-fs` > Actions > **Delete file system**.
+   - ⚠️ **DESMARQUE** a opção *"Create final backup"*. Digite o ID do File System e confirme.
+   - *Aguarde alguns minutos até que o status do File System desapareça do console.*
 
 #### Opção B: Pelo AWS CLI
 ```bash
@@ -348,40 +374,21 @@ aws fsx delete-file-system --file-system-id <FSX_ID> --skip-final-backup
 
 ### 7.2 Limpeza das Network Interfaces (ENIs) no AWS CloudShell
 
-Ao criar o FSx, a AWS anexa interfaces de rede elásticas (ENIs) na Subnet Privada associadas ao Security Group do FSx. Mesmo após deletar o FSx, algumas ENIs podem permanecer como "órfãs" ou demorar para desanexar, impedindo o Terraform de destruir a VPC e a Subnet.
+No **AWS CloudShell**:
 
-Abra o **AWS CloudShell** no console AWS (ou utilize seu terminal local com AWS CLI) e execute o script de limpeza de ENIs:
-
-#### Executar o script automatizado:
 ```bash
-# Baixar ou colar o conteúdo de scripts/cleanup-enis.sh e executar:
+# Executar o script automatizado de limpeza de ENIs:
 bash scripts/cleanup-enis.sh
-```
-
-#### Ou execute os comandos manuais no CloudShell:
-```bash
-# 1. Obter o ID da VPC do projeto
-VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=fsx-ontap-poc" --query "Vpcs[0].VpcId" --output text)
-
-# 2. Listar todas as ENIs residuais na VPC do FSx
-aws ec2 describe-network-interfaces \
-  --filters "Name=vpc-id,Values=$VPC_ID" \
-  --query "NetworkInterfaces[].[NetworkInterfaceId,Status,Description]" \
-  --output table
-
-# 3. Excluir ENIs residuais que estiverem com status 'available'
-# (Substitua <ENI_ID> pelo ID da interface listada acima)
-aws ec2 delete-network-interface --network-interface-id <ENI_ID>
 ```
 
 ---
 
 ### 7.3 Destruir a Infraestrutura Adjacente via Terraform
 
-Após validar no CloudShell que nenhuma interface de rede residual do FSx está vinculada à VPC/Subnet, execute a destruição completa da infraestrutura base:
+Após o CloudShell confirmar que não restam ENIs associadas ao FSx:
 
 ```bash
 cd terraform
 terraform destroy
 ```
-Digite `yes` para confirmar. Todos os recursos (VPC, Subnets, EC2s, Security Groups, IAM Roles) serão destruídos de forma limpa e sem erros de dependência!
+Digite `yes` para confirmar a remoção completa.
