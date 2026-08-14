@@ -41,6 +41,7 @@ Para utilizar este projeto, você precisará de:
   - `test-nfs.sh`: Teste de montagem, leitura/escrita com NFS no Linux.
   - `test-smb.ps1`: Teste de mapeamento e uso do SMB no Windows.
   - `test-performance.sh`: Teste simples de throughput utilizando `fio`.
+  - `cleanup-enis.sh`: Identifica e exclui Network Interfaces (ENIs) residuais do FSx no AWS CloudShell.
   - `cleanup-check.sh`: Valida se sobraram recursos na conta AWS após o destroy.
 
 ## Configuração
@@ -91,7 +92,7 @@ aws ssm start-session --target <INSTANCE_ID>
 A configuração operacional (shares SMB, usuários, export policies) é feita através dos scripts.
 
 > [!NOTE]
-> Você precisará da senha `fsxadmin` que você definiu durante a criação manual no console.
+> Você precisará da senha padrão `Fsx@dm1n` (ou a senha que você configurou na criação manual).
 
 Conecte-se na EC2 Linux via SSM, e execute:
 ```bash
@@ -109,15 +110,16 @@ Os testes devem ser executados dentro das respectivas instâncias (NFS no Linux,
 
 ## Destruição
 
-Para remover toda a infraestrutura e evitar cobranças, a destruição ocorre em duas etapas:
+Para remover toda a infraestrutura e evitar cobranças ou travamento da VPC, siga a ordem:
 
-1. Destrua os recursos criados manualmente executando os comandos AWS CLI na seção de destruição do `FSX_MANUAL_SETUP.md`.
-2. Após a exclusão do FSx ser concluída:
-```bash
-cd terraform
-terraform destroy
-```
-Confirme com `yes`. 
+1. **Deletar FSx**: Destrua os volumes, SVM e File System conforme o `FSX_MANUAL_SETUP.md` (**sempre desmarcando a criação de Final Backup**).
+2. **Limpar ENIs (CloudShell)**: Execute `bash scripts/cleanup-enis.sh` no AWS CloudShell para garantir que nenhuma Network Interface (NIC) órfã ficou travando a VPC/Subnet.
+3. **Destruir Terraform**:
+   ```bash
+   cd terraform
+   terraform destroy
+   ```
+   Confirme com `yes`.
 
 ## Verificação final
 
