@@ -1,0 +1,100 @@
+# ==============================================================================
+# Identificação do Projeto
+# ==============================================================================
+aws_region   = "us-east-1"
+project_name = "fsx-ontap"
+environment  = "dev"
+
+# ==============================================================================
+# Infraestrutura Existente (Preencha com os outputs do terraform de rede)
+# ==============================================================================
+# Subnet privada criada na VPC base (ex: subnet-0123456789abcdef0)
+subnet_ids          = ["subnet-0123456789abcdef0"]
+preferred_subnet_id = "subnet-0123456789abcdef0"
+
+# Security Group criado para o FSx com portas NFS/SMB/Mgmt liberadas (ex: sg-0123456789abcdef0)
+security_group_ids  = ["sg-0123456789abcdef0"]
+
+# (Opcional) Chave KMS personalizada. Comente para usar aws/fsx padrão
+kms_key_id = null
+
+# ==============================================================================
+# Dimensionamento do File System
+# ==============================================================================
+deployment_type          = "SINGLE_AZ_1" # ou "MULTI_AZ_1"
+storage_capacity_gib     = 1024          # Mínimo 1024 GiB para Single-AZ
+throughput_capacity_mbps = 128           # 128, 256, 512, 1024, 2048, 4096
+
+# Senha administrativa do cluster (fsxadmin)
+fsx_admin_password = "Fsx@dm1n"
+
+# ==============================================================================
+# Políticas de Backup e Integridade de Dados
+# ==============================================================================
+# Retenção em dias para backups diários automáticos
+automatic_backup_retention_days = 7
+
+# Horário de início do backup diário (UTC)
+daily_automatic_backup_start_time = "03:00"
+
+# Janela de manutenção semanal de 30min: d:HH:MM (UTC), onde 7 = Sábado
+weekly_maintenance_start_time = "7:04:00"
+
+# Propagação de tags para os snapshots de backup
+copy_tags_to_backups = true
+
+# ==============================================================================
+# Integração com Domínio Active Directory (AD & DNS)
+# ==============================================================================
+svm_name                       = "svm"
+svm_root_volume_security_style = "NTFS"
+
+# Se true, ingressa a SVM no domínio Active Directory informado abaixo
+join_active_directory = true
+
+# Nome FQDN do Domínio AD
+ad_domain_name = "corp.exemplo.com"
+
+# Servidores DNS do Domínio (IPs dos Domain Controllers ou AWS Route 53 Resolvers)
+ad_dns_ips = ["10.0.0.2", "10.0.0.3"]
+
+# Nome NetBIOS do servidor SMB / Objeto de computador criado no AD
+ad_netbios_name = "FSXSMB"
+
+# (Opcional) Distinguished Name da Unidade Organizacional (OU). Deixe null para Computers padrão
+ad_organizational_unit_distinguished_name = null
+
+# Conta de serviço do AD com permissão para ingressar máquinas no domínio
+ad_service_account_username = "svc_fsx_join"
+ad_service_account_password = "SenhaSuperSecretaAD123!"
+
+# Grupo do AD cujos membros serão administradores do File System
+ad_file_system_administrators_group = "Domain Admins"
+
+# ==============================================================================
+# Volumes e Políticas de Snapshot
+# ==============================================================================
+volumes = {
+  "vol_smb" = {
+    name                       = "vol_smb"
+    junction_path              = "/vol_smb"
+    size_in_megabytes          = 10240 # 10 GiB
+    security_style             = "NTFS"
+    storage_efficiency_enabled = true
+    snapshot_policy            = "default" # Snapshots point-in-time automáticos para integridade
+    tiering_policy_name        = "AUTO"
+    cooling_period_days        = 31
+    skip_final_backup          = false
+  },
+  # "vol_nfs" = {
+  #   name                       = "vol_nfs"
+  #   junction_path              = "/vol_nfs"
+  #   size_in_megabytes          = 10240 # 10 GiB
+  #  security_style             = "UNIX"
+  #   storage_efficiency_enabled = true
+  #   snapshot_policy            = "default"
+  #   tiering_policy_name        = "NONE"
+  #   cooling_period_days        = null
+  #   skip_final_backup          = false
+  # }
+}

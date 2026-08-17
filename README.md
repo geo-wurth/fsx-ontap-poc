@@ -34,6 +34,17 @@ Para utilizar este projeto, você precisará de:
   - `ec2.tf`: Definição das instâncias EC2 Linux e Windows.
   - `outputs.tf`: Valores de saída importantes após a criação.
   - `terraform.tfvars.example`: Exemplo de configuração de variáveis.
+- `terraform-fsx/`: **Módulo Terraform Isolado do FSx for NetApp ONTAP** (com Active Directory, Backups e Snapshots).
+  - `versions.tf`: Versões mínimas do Terraform e provider.
+  - `provider.tf`: Configuração do provider AWS e tags globais.
+  - `variables.tf`: Variáveis para rede, AD, senhas, dimensionamento e políticas de backup.
+  - `locals.tf`: Formatação de tags comuns e mesclagem.
+  - `fsx_filesystem.tf`: Criação do cluster ONTAP com rotinas de backup diário e manutenção.
+  - `fsx_svm.tf`: Criação da SVM com bloco dinâmico para join em Domínio Active Directory e DNS corporativo.
+  - `fsx_volumes.tf`: Provisionamento dinâmico de volumes com políticas de snapshot e tiering.
+  - `outputs.tf`: Endpoints de gerência, DNS de NFS e SMB, e caminhos de junção.
+  - `terraform.tfvars.example`: Exemplo com parâmetros corporativos documentados.
+  - `README.md`: Guia de execução e boas práticas exclusivo do módulo.
 - `FSX_MANUAL_SETUP.md`: Guia para provisionamento manual do FSx for NetApp ONTAP via Console e CLI de destruição.
 - `scripts/`: Scripts operacionais para configuração e teste do ONTAP.
   - `configure-ontap.sh`: Configura export policies, SMB shares e usuários locais via SSH no gerenciamento da SVM.

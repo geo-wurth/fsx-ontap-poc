@@ -1,0 +1,197 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon FSx for NetApp ONTAP MVP Template (Post-POC / Produção)'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'fsx-ontap-mvp'
+    Description: 'Nome do projeto para identificação.'
+  
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: 'VPC ID onde o FSx será criado.'
+    
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: 'Subnets (1 para Single-AZ, 2 para Multi-AZ).'
+    
+  PreferredSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'Subnet preferencial para a interface do FSx.'
+    
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: 'Security Groups associados ao FSx.'
+    
+  DeploymentType:
+    Type: String
+    Default: 'SINGLE_AZ_1'
+    AllowedValues:
+      - 'SINGLE_AZ_1'
+      - 'MULTI_AZ_1'
+    Description: 'Tipo de deployment do FSx ONTAP.'
+    
+  StorageCapacity:
+    Type: Number
+    Default: 1024
+    MinValue: 1024
+    Description: 'Capacidade de storage em GiB.'
+    
+  ThroughputCapacity:
+    Type: Number
+    Default: 128
+    AllowedValues: [128, 256, 512, 1024, 2048, 4096]
+    Description: 'Throughput em MBps.'
+    
+  FsxAdminPassword:
+    Type: String
+    NoEcho: true
+    Description: 'Senha do administrador do cluster (fsxadmin).'
+    MinLength: 8
+    
+  SvmName:
+    Type: String
+    Default: 'svmprod'
+    Description: 'Nome da Storage Virtual Machine (SVM).'
+    
+  SvmAdminPassword:
+    Type: String
+    NoEcho: true
+    Description: 'Senha do administrador da SVM (vsadmin).'
+    
+  JoinActiveDirectory:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: 'Define se a SVM será ingressada em um Active Directory.'
+    
+  AdDomainName:
+    Type: String
+    Default: ''
+    Description: 'Nome FQDN do Domínio AD (ex: corp.exemplo.com). Obrigatório se JoinActiveDirectory=true.'
+    
+  AdNetbiosName:
+    Type: String
+    Default: 'FSXSMB'
+    Description: 'Nome NetBIOS para a SVM no AD.'
+    
+  AdDnsIps:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: 'IPs dos servidores DNS do AD separados por vírgula.'
+    
+  AdServiceAccountUsername:
+    Type: String
+    Default: ''
+    Description: 'Usuário do AD para o join.'
+    
+  AdServiceAccountPassword:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: 'Senha da conta de serviço do AD.'
+
+  AdAdministratorsGroup:
+    Type: String
+    Default: 'Domain Admins'
+    Description: 'Grupo de administradores no AD.'
+    
+Conditions:
+  HasActiveDirectory: !Equals [ !Ref JoinActiveDirectory, 'true' ]
+
+Resources:
+  FSxFileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: ONTAP
+      StorageCapacity: !Ref StorageCapacity
+      SubnetIds: !Ref SubnetIds
+      SecurityGroupIds: !Ref SecurityGroupIds
+      OntapConfiguration:
+        DeploymentType: !Ref DeploymentType
+        PreferredSubnetId: !Ref PreferredSubnetId
+        ThroughputCapacity: !Ref ThroughputCapacity
+        FsxAdminPassword: !Ref FsxAdminPassword
+        AutomaticBackupRetentionDays: 7
+        DailyAutomaticBackupStartTime: '03:00'
+        WeeklyMaintenanceStartTime: '7:04:00'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-cluster'
+
+  FSxSVM:
+    Type: AWS::FSx::StorageVirtualMachine
+    Properties:
+      FileSystemId: !Ref FSxFileSystem
+      Name: !Ref SvmName
+      RootVolumeSecurityStyle: UNIX
+      SvmAdminPassword: !Ref SvmAdminPassword
+      ActiveDirectoryConfiguration: !If 
+        - HasActiveDirectory
+        - NetBiosName: !Ref AdNetbiosName
+          SelfManagedActiveDirectoryConfiguration:
+            DomainName: !Ref AdDomainName
+            DnsIps: !Ref AdDnsIps
+            UserName: !Ref AdServiceAccountUsername
+            Password: !Ref AdServiceAccountPassword
+            FileSystemAdministratorsGroup: !Ref AdAdministratorsGroup
+        - !Ref "AWS::NoValue"
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${SvmName}'
+
+  VolumeSMB:
+    Type: AWS::FSx::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Name: vol_smb
+      VolumeType: ONTAP
+      OntapConfiguration:
+        StorageVirtualMachineId: !Ref FSxSVM
+        JunctionPath: /vol_smb
+        SizeInMegabytes: 10240
+        SecurityStyle: NTFS
+        StorageEfficiencyEnabled: true
+        TieringPolicy:
+          Name: AUTO
+          CoolingPeriod: 31
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-vol-smb'
+
+  VolumeNFS:
+    Type: AWS::FSx::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Name: vol_nfs
+      VolumeType: ONTAP
+      OntapConfiguration:
+        StorageVirtualMachineId: !Ref FSxSVM
+        JunctionPath: /vol_nfs
+        SizeInMegabytes: 10240
+        SecurityStyle: UNIX
+        StorageEfficiencyEnabled: true
+        TieringPolicy:
+          Name: NONE
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-vol-nfs'
+
+Outputs:
+  FileSystemId:
+    Description: "FSx File System ID"
+    Value: !Ref FSxFileSystem
+  FileSystemManagementDNS:
+    Description: "DNS para gerência do File System"
+    Value: !GetAtt FSxFileSystem.DNSName
+  SVMId:
+    Description: "Storage Virtual Machine ID"
+    Value: !Ref FSxSVM
+  VolumeSMBId:
+    Description: "ID do Volume SMB"
+    Value: !Ref VolumeSMB
+  VolumeNFSId:
+    Description: "ID do Volume NFS"
+    Value: !Ref VolumeNFS

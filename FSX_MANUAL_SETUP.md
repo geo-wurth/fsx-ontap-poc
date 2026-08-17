@@ -360,8 +360,8 @@ sudo chmod 777 /mnt/nfs
 #### Opção B: Pelo AWS CLI
 ```bash
 # 1. Deletar Volumes ignorando Final Backup
-aws fsx delete-volume --volume-id <VOL_NFS_ID>
-aws fsx delete-volume --volume-id <VOL_SMB_ID>
+aws fsx delete-volume --volume-id <VOL_NFS_ID> --ontap-configuration '{"SkipFinalBackup": true}'
+aws fsx delete-volume --volume-id <VOL_SMB_ID> --ontap-configuration '{"SkipFinalBackup": true}'
 
 # 2. Deletar a Storage Virtual Machine (SVM)
 aws fsx delete-storage-virtual-machine --storage-virtual-machine-id <SVM_ID>

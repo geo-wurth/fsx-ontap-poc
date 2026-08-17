@@ -1,0 +1,74 @@
+[
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "fsx-ontap-mvp"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-0123456789abcdef0"
+  },
+  {
+    "ParameterKey": "SubnetIds",
+    "ParameterValue": "subnet-0123456789abcdef0"
+  },
+  {
+    "ParameterKey": "PreferredSubnetId",
+    "ParameterValue": "subnet-0123456789abcdef0"
+  },
+  {
+    "ParameterKey": "SecurityGroupIds",
+    "ParameterValue": "sg-0123456789abcdef0"
+  },
+  {
+    "ParameterKey": "DeploymentType",
+    "ParameterValue": "SINGLE_AZ_1"
+  },
+  {
+    "ParameterKey": "StorageCapacity",
+    "ParameterValue": "1024"
+  },
+  {
+    "ParameterKey": "ThroughputCapacity",
+    "ParameterValue": "128"
+  },
+  {
+    "ParameterKey": "FsxAdminPassword",
+    "ParameterValue": "Fsx@dm1nPassword123!"
+  },
+  {
+    "ParameterKey": "SvmName",
+    "ParameterValue": "svmprod"
+  },
+  {
+    "ParameterKey": "SvmAdminPassword",
+    "ParameterValue": "Fsx@dm1nPassword123!"
+  },
+  {
+    "ParameterKey": "JoinActiveDirectory",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "AdDomainName",
+    "ParameterValue": "corp.exemplo.com"
+  },
+  {
+    "ParameterKey": "AdNetbiosName",
+    "ParameterValue": "FSXSMB"
+  },
+  {
+    "ParameterKey": "AdDnsIps",
+    "ParameterValue": "10.0.0.2,10.0.0.3"
+  },
+  {
+    "ParameterKey": "AdServiceAccountUsername",
+    "ParameterValue": "svc_fsx_join"
+  },
+  {
+    "ParameterKey": "AdServiceAccountPassword",
+    "ParameterValue": "SenhaSuperSecretaAD123!"
+  },
+  {
+    "ParameterKey": "AdAdministratorsGroup",
+    "ParameterValue": "Domain Admins"
+  }
+]
