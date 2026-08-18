@@ -1,9 +1,13 @@
 # ==============================================================================
 # Identificação do Projeto
 # ==============================================================================
-aws_region   = "us-east-1"
-project_name = "fsx-ontap"
-environment  = "dev"
+aws_region  = "us-east-1"
+projeto     = "fsx-ontap-poc"
+owner       = "time-infra"
+shared      = false
+stack       = "storage"
+iac         = "terraform"
+environment = "poc"
 
 # ==============================================================================
 # Infraestrutura Existente (Preencha com os outputs do terraform de rede)

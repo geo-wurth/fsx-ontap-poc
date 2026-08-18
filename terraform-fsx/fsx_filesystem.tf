@@ -16,7 +16,7 @@ resource "aws_fsx_ontap_file_system" "main" {
   weekly_maintenance_start_time     = var.weekly_maintenance_start_time
 
   tags = {
-    Name = "${var.project_name}-fsx-ontap"
+    Name = "${var.projeto}-fsx-ontap"
   }
 
   lifecycle {

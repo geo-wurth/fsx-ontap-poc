@@ -22,7 +22,7 @@ resource "aws_fsx_ontap_volume" "volumes" {
   }
 
   tags = {
-    Name           = "${var.project_name}-${each.value.name}"
+    Name           = "${var.projeto}-${each.value.name}"
     SecurityStyle  = each.value.security_style
     SnapshotPolicy = each.value.snapshot_policy
   }

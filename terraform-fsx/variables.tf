@@ -7,10 +7,34 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "project_name" {
+variable "projeto" {
   description = "Nome do projeto para identificação e prefixos de recursos"
   type        = string
   default     = "fsx-ontap-poc"
+}
+
+variable "owner" {
+  description = "Responsável ou equipe dona do recurso"
+  type        = string
+  default     = "time-infra"
+}
+
+variable "shared" {
+  description = "Indica se o recurso é compartilhado"
+  type        = bool
+  default     = false
+}
+
+variable "stack" {
+  description = "Nome da stack do recurso"
+  type        = string
+  default     = "storage"
+}
+
+variable "iac" {
+  description = "Ferramenta de IaC utilizada"
+  type        = string
+  default     = "terraform"
 }
 
 variable "environment" {

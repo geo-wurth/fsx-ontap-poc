@@ -24,6 +24,6 @@ resource "aws_fsx_ontap_storage_virtual_machine" "svm" {
   }
 
   tags = {
-    Name = "${var.project_name}-${var.svm_name}"
+    Name = "${var.projeto}-${var.svm_name}"
   }
 }
