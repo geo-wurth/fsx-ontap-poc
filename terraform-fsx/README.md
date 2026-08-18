@@ -1,123 +1,109 @@
-# Módulo Terraform Isolado - Amazon FSx for NetApp ONTAP
+# Amazon FSx for NetApp ONTAP - Infrastructure as Code (IaC)
 
-Este projeto Terraform é **totalmente isolado e desacoplado**, dedicado exclusivamente ao provisionamento e governança do **Amazon FSx for NetApp ONTAP**, integração com **Active Directory**, políticas de **Backup Automático** e regras de **Integridade de Dados (Snapshots & Deduplicação)**.
-
----
-
-## Arquitetura e Recursos Gerenciados
-
-```
-                              ┌───────────────────────────────────────────────────┐
-                              │  Módulo Base: VPC / Subnets / EC2 / Security SGs   │
-                              └─────────────────────────┬─────────────────────────┘
-                                                        │ (IDs passados via variáveis)
-                                                        ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Módulo Isolado: FSx for NetApp ONTAP (terraform-fsx/)                                                           │
-│                                                                                                                 │
-│   ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐   │
-│   │ File System FSx ONTAP                                                                                   │   │
-│   │  • Single-AZ / Multi-AZ                                                                                 │   │
-│   │  • Backups Automáticos Diários (Janela UTC + Retenção 7-30 dias)                                        │   │
-│   │  • Criptografia em Repouso (KMS) & Manutenção Semanal                                                   │   │
-│   └────────────────────────────────────────────────────┬────────────────────────────────────────────────────┘   │
-│                                                        │                                                        │
-│   ┌────────────────────────────────────────────────────┴────────────────────────────────────────────────────┐   │
-│   │ Storage Virtual Machine (SVM)                                                                           │   │
-│   │  • Join em Domínio Active Directory (Self-Managed AD ou AWS Managed AD)                                │   │
-│   │  • Resolução de DNS Corporativo & Autenticação Kerberos/NTLM                                            │   │
-│   └────────────────────────────────────────────────────┬────────────────────────────────────────────────────┘   │
-│                                                        │                                                        │
-│               ┌────────────────────────────────────────┴────────────────────────────────────────┐             │
-│               ▼                                                                                 ▼             │
-│   ┌────────────────────────────────────────┐                        ┌────────────────────────────────────────┐  │
-│   │ Volume SMB (vol_smb)                   │                        │ Volume NFS (vol_nfs)                   │  │
-│   │  • Security Style: NTFS                │                        │  • Security Style: UNIX                │  │
-│   │  • Snapshot Policy: default (Point-in-Time) │                    │  • Snapshot Policy: default (Point-in-Time) ││
-│   │  • Storage Efficiency: Enabled         │                        │  • Storage Efficiency: Enabled         │  │
-│   │  • Capacity Tiering: AUTO              │                        │  • Capacity Tiering: NONE              │  │
-│   └────────────────────────────────────────┘                        └────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+Este diretório contém os módulos do **Terraform** necessários para o provisionamento automatizado do Amazon FSx for NetApp ONTAP em um ambiente produtivo (Pós-POC). A arquitetura inclui a implantação do File System primário, criação de uma Storage Virtual Machine (SVM) com integração ao Active Directory e o provisionamento de volumes lógicos com protocolos SMB e NFS.
 
 ---
 
-## Melhores Práticas de IaC e Integridade de Dados Implementadas
+## 📋 Pré-requisitos e Configuração Básica
 
-1. **Garantia de Integridade de Disco pós-Backup:**
-   - **Snapshots do ONTAP (`snapshot_policy = "default"`)**: Criam cópias pontuais (*read-only*) no nível de blocos sem overhead de I/O, garantindo proteção contra corrupção lógica, deleção acidental ou ataques de ransomware, permitindo restauração instantânea de arquivos.
-   - **Backups do FSx (`automatic_backup_retention_days = 7+`)**: Snapshots consistentes transferidos para o Amazon S3 com retenção configurável e criptografia KMS, permitindo *Point-in-Time Restore* do sistema inteiro.
-   - **Eficiência de Armazenamento (`storage_efficiency_enabled = true`)**: Ativa deduplicação e compressão de blocos no motor WAFL do NetApp ONTAP.
-
-2. **Segurança e Variáveis Sensíveis:**
-   - Todas as credenciais de cluster (`fsx_admin_password`), SVM (`svm_admin_password`) e Active Directory (`ad_service_account_password`) estão declaradas com `sensitive = true`, impedindo vazamento nos logs do console e outputs.
-
-3. **Integração Dinâmica com Active Directory:**
-   - O bloco `active_directory_configuration` é dinâmico. Caso `join_active_directory = false`, o módulo cria uma SVM independente para uso de usuários locais e workgroups.
+Antes de iniciar a implantação, certifique-se de que a infraestrutura base já esteja provisionada. Este módulo pressupõe a existência de:
+- **VPC e Subnets**: No mínimo uma subnet privada para implementações *Single-AZ* ou duas subnets para implementações *Multi-AZ*.
+- **Security Groups**: Um Security Group associado às interfaces do FSx que permita o tráfego nas portas de gerência (SSH 22, HTTPS 443) e dados (NFS 2049, SMB 445).
+- **Active Directory**: Um domínio funcional com acesso de rede a partir das subnets designadas para o FSx.
 
 ---
 
-## Como Executar no AWS CloudShell / Terminal
+## ⚙️ Variáveis de Configuração
 
-### Passo 1: Obter as Informações da Infraestrutura Base
-Antes de aplicar, colete os outputs do seu Terraform de rede (ou do ambiente existente):
-- `private_subnet_id` (ex: `subnet-0123456789abcdef0`)
-- `fsx_security_group_id` (ex: `sg-0123456789abcdef0`)
-
-### Passo 2: Configurar o Arquivo de Variáveis
-Acesse o diretório `terraform-fsx`:
+As configurações do projeto são gerenciadas através do arquivo de variáveis. Para iniciar, crie uma cópia do arquivo de exemplo:
 ```bash
-cd fsx-ontap-poc/terraform-fsx
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-Edite o arquivo `terraform.tfvars`:
-```bash
-nano terraform.tfvars
-```
-Preencha os campos de rede, senhas e informações do Active Directory:
-- `subnet_ids` e `preferred_subnet_id`
-- `security_group_ids`
-- `ad_domain_name` (Ex: `corp.suaempresa.com`)
-- `ad_dns_ips` (Ex: `["10.0.0.2", "10.0.0.3"]`)
-- `ad_service_account_username` e `ad_service_account_password`
+### Principais Variáveis e Tags de Identificação
+O projeto utiliza um sistema de _locals_ dinâmico (no arquivo `locals.tf`) para padronização de tags em todos os recursos gerados:
+- `projeto`: Nome do projeto (ex: `fsx-ontap-poc`).
+- `owner`: Equipe responsável (ex: `time-infra`).
+- `shared`: Booleano identificando se o recurso é compartilhado.
+- `stack`: Nome da stack tecnológica (ex: `storage`).
+- `iac`: Ferramenta de IaC em uso (`terraform`).
 
-### Passo 3: Inicializar e Aplicar
+### Dimensionamento e Capacidade
+- `deployment_type`: Escolha entre `SINGLE_AZ_1` ou `MULTI_AZ_1`.
+- `storage_capacity_gib`: Capacidade inicial mínima de 1024 GiB (SSD).
+- `throughput_capacity_mbps`: Capacidade de banda suportada pelo File System (ex: `128`).
+
+### Segurança e Active Directory
+- Senhas administrativas (`fsx_admin_password`, `svm_admin_password`) configuradas de forma sensível e bloqueadas contra exibição em logs nativos.
+- Bloco do Active Directory condicionado via `join_active_directory`, mapeando o nome de domínio, IPs dos servidores DNS e as credenciais das contas de serviço para promover o ingresso autônomo do file system no domínio.
+
+### Gestão de Volumes e Backups
+- `volumes`: Um mapa estruturado (Object Map) contendo as políticas de armazenamento de volumes independentes, incluindo regras de *Storage Efficiency* (Deduplicação/Compressão ativadas) e diretrizes de *Tiering* automatizado para S3 (`AUTO`, `SNAPSHOT_ONLY`, etc).
+- `skip_final_backup`: Controle individual em cada volume para decidir se a AWS deve reter um Snapshot de segurança durante a execução de um `terraform destroy`. O valor `false` (padrão) assegura a retenção e é indicado para cenários de produção.
+
+---
+
+## 🚀 Instalação do Terraform (Versão 1.5.7)
+
+Neste projeto, utilizamos a versão **1.5.7** do Terraform. Esta é a **última versão estável lançada sob a licença open-source (MPL)** antes da transição comercial da HashiCorp para a licença BSL (Business Source License). Manter esta versão garante total conformidade e uso livre em ambientes corporativos e esteiras de automação, sem incorrer em restrições comerciais.
+
+Caso você esteja operando a partir do terminal do **AWS CloudShell** ou em um ambiente local Linux, o binário pode não estar presente ou estar em uma versão diferente. Siga as instruções abaixo para realizar o download direto e a instalação limpa da versão especificada.
+
+### Download e Instalação via CLI
+Instale os pacotes de pré-requisito (`wget` e `unzip`), faça o download do binário oficial da HashiCorp e extraia-o no diretório de executáveis do sistema.
+
+Para sistemas baseados em **Amazon Linux 2023**, **RHEL 8+** ou **Fedora** (usando `dnf`):
 ```bash
-# Inicializar os provedores
+sudo dnf install -y wget unzip
+wget https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
+sudo unzip terraform_1.5.7_linux_amd64.zip -d /usr/local/bin/
+```
+
+Para sistemas baseados em **Amazon Linux 2** ou **CentOS 7** (usando `yum` em substituição ao `dnf`):
+```bash
+sudo yum install -y wget unzip
+wget https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
+sudo unzip terraform_1.5.7_linux_amd64.zip -d /usr/local/bin/
+```
+
+Verifique a instalação para garantir que a versão `1.5.7` foi configurada com sucesso no seu `PATH` e atende à política restritiva contida no arquivo `versions.tf` (`~> 1.5.0`):
+```bash
+terraform version
+```
+
+---
+
+## 🛠️ Execução: Planejamento e Implantação
+
+Após configurar devidamente suas credenciais da AWS e preencher os parâmetros obrigatórios no arquivo `terraform.tfvars`, a esteira de implantação se resume a 3 passos primordiais:
+
+### 1. Inicialização do Backend
+Processo que valida as dependências do código e faz o download seguro da versão do Provider oficial da AWS definida em nossos módulos.
+```bash
 terraform init
-
-# Validar o plano de execução
-terraform plan
-
-# Aplicar e provisionar o FSx ONTAP
-terraform apply
 ```
-Digite `yes` para confirmar. *(O provisionamento completo do cluster ONTAP e ingresso no AD leva cerca de 15 a 20 minutos).*
+
+### 2. Validação e Planejamento (Plan)
+Verifica a consistência e a integridade de sintaxe do código HCL. O comando `plan` faz a leitura do ambiente contra a API da AWS (simulando a execução) e compila um relatório preciso do que será alterado ou criado, salvando essas intenções no binário `tfplan`.
+```bash
+terraform validate
+terraform plan -out=tfplan
+```
+> **Nota de Governança:** Inspecione cuidadosamente o plano retornado na tela. É nesta etapa de "Dry-Run" que o arquiteto aprova a coerência do dimensionamento de storage, as portas de sub-rede e as identificações de tags que serão associadas.
+
+### 3. Implantação Efetiva (Apply)
+Se os resultados do plano estiverem de acordo com a arquitetura homologada, execute o script de aplicação apontando para o arquivo de plano previamente inspecionado.
+```bash
+terraform apply tfplan
+```
+> ⏱️ **Observação:** O processo de provisionamento de novos Clusters FSx ONTAP (em especial configurações Multi-AZ atreladas com domínios LDAP/Active Directory) pode demorar **entre 30 a 60 minutos** até que o estado de todos os componentes atinja o flag `Available`.
 
 ---
 
-## Outputs Gerados
+## 🧹 Destruição e Limpeza Controlada (Clean-up)
 
-Após a criação, o Terraform exibirá os endpoints prontos para conexão:
-- `fsx_file_system_id`: ID do cluster FSx.
-- `fsx_management_dns_name`: Endpoint para conexão SSH administrativa (`ssh fsxadmin@<endpoint>`).
-- `svm_smb_dns_name`: Endpoint para mapeamento de unidades Windows (`\\<svm_smb_dns_name>\vol_smb`).
-- `svm_nfs_dns_name`: Endpoint para montagem NFS no Linux (`mount -t nfs <svm_nfs_dns_name>:/vol_nfs /mnt/nfs`).
-- `volumes`: Lista detalhada de todos os volumes, IDs e seus respectivos junction paths.
+Para realocação ou desmonte da infraestrutura sem risco de criar inconsistências, garanta que os bloqueios de rede estejam suspensos e execute a destruição em cadeia de baixo para cima (Volumes ➔ SVM ➔ Cluster). O Terraform orquestra as deleções automaticamente com este comando:
 
----
-
-## Destruição e Proteção
-
-Ao executar `terraform destroy`, o parâmetro `skip_final_backup` está configurado **individualmente por volume** no bloco `volumes` em `terraform.tfvars`:
-- `skip_final_backup = false` (Padrão corporativo: o Terraform solicitará a criação de um backup final dos dados antes de destruir o volume).
-- `skip_final_backup = true` (Ideal para ambientes de teste e POC: destrói o volume imediatamente sem guardar snapshot final, evitando custos residuais).
-
-> [!NOTE]
-> Diferente de outros serviços, no FSx for NetApp ONTAP o *Final Backup* é atrelado aos **Volumes**, e não diretamente ao File System base.
-
-Para destruir toda a infraestrutura deste módulo isolado:
 ```bash
 terraform destroy
 ```
